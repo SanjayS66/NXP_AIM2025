@@ -56,7 +56,7 @@ SERVER_WAIT_TIMEOUT_SEC = 5.0
 
 PROGRESS_TABLE_GUI = True
 
-
+#GUI part : Tkinter 
 class WindowProgressTable:
 	def __init__(self, root, shelf_count):
 		self.root = root
@@ -97,7 +97,7 @@ def run_gui(shelf_count):
 	box_app = WindowProgressTable(root, shelf_count)
 	root.mainloop()
 
-
+#main ros2 node
 class WarehouseExplore(Node):
 	""" Initializes warehouse explorer node with the required publishers and subscriptions.
 
@@ -107,32 +107,37 @@ class WarehouseExplore(Node):
 	def __init__(self):
 		super().__init__('warehouse_explore')
 
+		#action client to send goal pose to nav2 server
 		self.action_client = ActionClient(
 			self,
-			NavigateToPose,
+			NavigateToPose,				  
 			'/navigate_to_pose')
 
+		#current robot position	
 		self.subscription_pose = self.create_subscription(
 			PoseWithCovarianceStamped,
 			'/pose',
-			self.pose_callback,
+			self.pose_callback,		      			
 			QOS_PROFILE_DEFAULT)
 
+		#costmap for path planning
 		self.subscription_global_map = self.create_subscription(
 			OccupancyGrid,
-			'/global_costmap/costmap',
+			'/global_costmap/costmap', 
 			self.global_map_callback,
 			QOS_PROFILE_DEFAULT)
 
+		#SLAM output map
 		self.subscription_simple_map = self.create_subscription(
 			OccupancyGrid,
-			'/map',
+			'/map',						
 			self.simple_map_callback,
 			QOS_PROFILE_DEFAULT)
 
+		#robot status
 		self.subscription_status = self.create_subscription(
 			Status,
-			'/cerebri/out/status',
+			'/cerebri/out/status',		
 			self.cerebri_status_callback,
 			QOS_PROFILE_DEFAULT)
 
@@ -142,19 +147,21 @@ class WarehouseExplore(Node):
 			self.behavior_tree_log_callback,
 			QOS_PROFILE_DEFAULT)
 
+		#to get object detection result from YOLO
 		self.subscription_shelf_objects = self.create_subscription(
 			WarehouseShelf,
 			'/shelf_objects',
 			self.shelf_objects_callback,
 			QOS_PROFILE_DEFAULT)
 
-		# Subscription for camera images.
+		# Subscription for camera images for QR 
 		self.subscription_camera = self.create_subscription(
 			CompressedImage,
 			'/camera/image_raw/compressed',
 			self.camera_image_callback,
 			QOS_PROFILE_DEFAULT)
 
+		#send manual control commands to bot 
 		self.publisher_joy = self.create_publisher(
 			Joy,
 			'/cerebri/in/joy',
@@ -166,44 +173,50 @@ class WarehouseExplore(Node):
 			"/debug_images/qr_code",
 			QOS_PROFILE_DEFAULT)
 
+		#publish shelf data
 		self.publisher_shelf_data = self.create_publisher(
 			WarehouseShelf,
 			"/shelf_data",
 			QOS_PROFILE_DEFAULT)
 
-		self.declare_parameter('shelf_count', 1)
-		self.declare_parameter('initial_angle', 0.0)
 
+		self.declare_parameter('shelf_count', 1)         #(can be set when launching)
+		self.declare_parameter('initial_angle', 0.0)     #(can be set when launching)
+
+
+		#Retrieves the values of the declared parameters from ROS2 parameter server and stores them in local variables.
+		# (because get_parameter is relative slow and hence stored in a local variable)
 		self.shelf_count = \
 			self.get_parameter('shelf_count').get_parameter_value().integer_value
 		self.initial_angle = \
 			self.get_parameter('initial_angle').get_parameter_value().double_value
 
 		# --- Robot State ---
-		self.armed = False
-		self.logger = self.get_logger()
+		self.armed = False   #boolean flag to track whether robot is activated/armed
+		self.logger = self.get_logger()  #log data for debugging
 
 		# --- Robot Pose ---
-		self.pose_curr = PoseWithCovarianceStamped()
-		self.buggy_pose_x = 0.0
-		self.buggy_pose_y = 0.0
-		self.buggy_center = (0.0, 0.0)
-		self.world_center = (0.0, 0.0)
+		self.pose_curr = PoseWithCovarianceStamped()  #pose message object having position,orientation and uncertainity
+		self.buggy_pose_x = 0.0    #robots current x
+		self.buggy_pose_y = 0.0    #robots current y
+		self.buggy_center = (0.0, 0.0)   #robot current position as coordinate pair
+		self.world_center = (0.0, 0.0)   #map center as coordinate pair
 
 		# --- Map Data ---
-		self.simple_map_curr = None
-		self.global_map_curr = None
+		self.simple_map_curr = None   #to store the slam map (Type: nav_msgs/OccupancyGrid)
+		self.global_map_curr = None   #to store the costmap (Type: nav_msgs/OccupancyGrid)
 
 		# --- Goal Management ---
-		self.xy_goal_tolerance = 0.5
-		self.goal_completed = True  # No goal is currently in-progress.
-		self.goal_handle_curr = None
-		self.cancelling_goal = False
-		self.recovery_threshold = 10
+		self.xy_goal_tolerance = 0.5  #range within target pose bot is considered to reached target
+		self.goal_completed = True   # No goal is currently in-progress.
+		self.goal_handle_curr = None  #reference to current active goal 
+		self.cancelling_goal = False  #tracks whether goal cancellation in progress or not
+		self.recovery_threshold = 10  #number of recovery steps before giving up
 
 		# --- Goal Creation ---
 		self._frame_id = "map"
-
+		
+		#frontier exploration : bot moves autonomously from free space to frontier(i.e. boundary between explored and unexplored spaces ) 
 		# --- Exploration Parameters ---
 		self.max_step_dist_world_meters = 7.0
 		self.min_step_dist_world_meters = 4.0
@@ -219,8 +232,8 @@ class WarehouseExplore(Node):
 		self.shelf_objects_curr = WarehouseShelf()
 
 
-
-	def pose_callback(self, message):
+	#extract the current x and y from the pose 
+	def pose_callback(self, message):#✅
 		"""Callback function to handle pose updates.
 
 		Args:
@@ -233,8 +246,9 @@ class WarehouseExplore(Node):
 		self.buggy_pose_x = message.pose.pose.position.x
 		self.buggy_pose_y = message.pose.pose.position.y
 		self.buggy_center = (self.buggy_pose_x, self.buggy_pose_y)
-
-	def simple_map_callback(self, message):
+	
+	#process the raw slam OccupancyGrid and calculate the world center
+	def simple_map_callback(self, message):#✅
 		"""Callback function to handle simple map updates.
 
 		Args:
@@ -244,7 +258,7 @@ class WarehouseExplore(Node):
 			None
 		"""
 		self.simple_map_curr = message
-		map_info = self.simple_map_curr.info
+		map_info = self.simple_map_curr.info  #metdata of map i.e. width,height,res etc.
 		self.world_center = self.get_world_coord_from_map_coord(
 			map_info.width / 2, map_info.height / 2, map_info
 		)
@@ -299,7 +313,7 @@ class WarehouseExplore(Node):
 			self.full_map_explored_count += 1
 			print(f"Nothing found in frontiers; count = {self.full_map_explored_count}")
 
-	def get_frontiers_for_space_exploration(self, map_array):
+	def get_frontiers_for_space_exploration(self, map_array):#✅
 		"""Identifies frontiers for space exploration.
 
 		Args:
@@ -347,7 +361,7 @@ class WarehouseExplore(Node):
 
 
 
-	def publish_debug_image(self, publisher, image):
+	def publish_debug_image(self, publisher, image):#✅
 		"""Publishes images for debugging purposes.
 
 		Args:
@@ -380,7 +394,7 @@ class WarehouseExplore(Node):
 		# Optional line for visualizing image on foxglove.
 		# self.publish_debug_image(self.publisher_qr_decode, image)
 
-	def cerebri_status_callback(self, message):
+	def cerebri_status_callback(self, message):#✅
 		"""Callback function to handle cerebri status updates.
 
 		Args:
@@ -398,7 +412,7 @@ class WarehouseExplore(Node):
 			msg.axes = [0.0, 0.0, 0.0, 0.0]
 			self.publisher_joy.publish(msg)
 
-	def behavior_tree_log_callback(self, message):
+	def behavior_tree_log_callback(self, message):#✅ 
 		"""Alternative method for checking goal status.
 
 		Args:
@@ -462,7 +476,7 @@ class WarehouseExplore(Node):
 			self.table_col_count += 1
 		"""
 
-	def rover_move_manual_mode(self, speed, turn):
+	def rover_move_manual_mode(self, speed, turn):#✅ 
 		"""Operates the rover in manual mode by publishing on /cerebri/in/joy.
 
 		Args:
@@ -481,7 +495,7 @@ class WarehouseExplore(Node):
 
 
 
-	def cancel_goal_callback(self, future):
+	def cancel_goal_callback(self, future):#✅
 		"""
 		Callback function executed after a cancellation request is processed.
 
@@ -498,7 +512,7 @@ class WarehouseExplore(Node):
 			self.cancelling_goal = False  # Mark cancellation as completed (failed).
 			return False
 
-	def cancel_current_goal(self):
+	def cancel_current_goal(self):#✅
 		"""Requests cancellation of the currently active navigation goal."""
 		if self.goal_handle_curr is not None and not self.cancelling_goal:
 			self.cancelling_goal = True  # Mark cancellation in-progress.
@@ -506,7 +520,7 @@ class WarehouseExplore(Node):
 			cancel_future = self.action_client._cancel_goal_async(self.goal_handle_curr)
 			cancel_future.add_done_callback(self.cancel_goal_callback)
 
-	def goal_result_callback(self, future):
+	def goal_result_callback(self, future):#✅
 		"""
 		Callback function executed when the navigation goal reaches a final result.
 
@@ -524,7 +538,7 @@ class WarehouseExplore(Node):
 		self.goal_completed = True  # Mark goal as completed.
 		self.goal_handle_curr = None  # Clear goal handle.
 
-	def goal_response_callback(self, future):
+	def goal_response_callback(self, future):#✅
 		"""
 		Callback function executed after the goal is sent to the action server.
 
@@ -544,7 +558,7 @@ class WarehouseExplore(Node):
 			get_result_future = goal_handle.get_result_async()
 			get_result_future.add_done_callback(self.goal_result_callback)
 
-	def goal_feedback_callback(self, msg):
+	def goal_feedback_callback(self, msg):#✅
 		"""
 		Callback function to receive feedback from the navigation action.
 
@@ -565,7 +579,7 @@ class WarehouseExplore(Node):
 			self.logger.warn(f"Cancelling. Recoveries = {number_of_recoveries}.")
 			self.cancel_current_goal()  # Unblock by discarding the current goal.
 
-	def send_goal_from_world_pose(self, goal_pose):
+	def send_goal_from_world_pose(self, goal_pose):#✅
 		"""
 		Sends a navigation goal to the Nav2 action server.
 
@@ -595,7 +609,7 @@ class WarehouseExplore(Node):
 
 
 
-	def _get_map_conversion_info(self, map_info) -> Optional[Tuple[float, float]]:
+	def _get_map_conversion_info(self, map_info) -> Optional[Tuple[float, float]]:#✅
 		"""Helper function to get map origin and resolution."""
 		if map_info:
 			origin = map_info.origin
@@ -605,7 +619,7 @@ class WarehouseExplore(Node):
 			return None
 
 	def get_world_coord_from_map_coord(self, map_x: int, map_y: int, map_info) \
-					   -> Tuple[float, float]:
+					   -> Tuple[float, float]:#✅
 		"""Converts map coordinates to world coordinates."""
 		if map_info:
 			resolution, origin_x, origin_y = self._get_map_conversion_info(map_info)
@@ -616,7 +630,7 @@ class WarehouseExplore(Node):
 			return (0.0, 0.0)
 
 	def get_map_coord_from_world_coord(self, world_x: float, world_y: float, map_info) \
-					   -> Tuple[int, int]:
+					   -> Tuple[int, int]:#✅
 		"""Converts world coordinates to map coordinates."""
 		if map_info:
 			resolution, origin_x, origin_y = self._get_map_conversion_info(map_info)
@@ -626,7 +640,7 @@ class WarehouseExplore(Node):
 		else:
 			return (0, 0)
 
-	def _create_quaternion_from_yaw(self, yaw: float) -> Quaternion:
+	def _create_quaternion_from_yaw(self, yaw: float) -> Quaternion:#✅
 		"""Helper function to create a Quaternion from a yaw angle."""
 		cy = math.cos(yaw * 0.5)
 		sy = math.sin(yaw * 0.5)
@@ -638,7 +652,7 @@ class WarehouseExplore(Node):
 		return q
 
 	def create_yaw_from_vector(self, dest_x: float, dest_y: float,
-				   source_x: float, source_y: float) -> float:
+				   source_x: float, source_y: float) -> float:#✅
 		"""Calculates the yaw angle from a source to a destination point.
 			NOTE: This function is independent of the type of map used.
 
@@ -652,7 +666,7 @@ class WarehouseExplore(Node):
 		return yaw
 
 	def create_goal_from_world_coord(self, world_x: float, world_y: float,
-					 yaw: Optional[float] = None) -> PoseStamped:
+					 yaw: Optional[float] = None) -> PoseStamped:#✅
 		"""Creates a goal PoseStamped from world coordinates.
 			NOTE: This function is independent of the type of map used.
 		"""
@@ -680,7 +694,7 @@ class WarehouseExplore(Node):
 		return goal_pose
 
 	def create_goal_from_map_coord(self, map_x: int, map_y: int, map_info,
-				       yaw: Optional[float] = None) -> PoseStamped:
+				       yaw: Optional[float] = None) -> PoseStamped:#✅
 		"""Creates a goal PoseStamped from map coordinates."""
 		world_x, world_y = self.get_world_coord_from_map_coord(map_x, map_y, map_info)
 
