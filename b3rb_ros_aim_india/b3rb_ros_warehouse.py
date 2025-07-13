@@ -394,6 +394,104 @@ class WarehouseExplore(Node):
 		# Optional line for visualizing image on foxglove.
 		# self.publish_debug_image(self.publisher_qr_decode, image)
 
+	def camera_image_callback(self, message):
+		"""Callback function to handle incoming camera images and detect QR codes.
+
+    	Args:
+        	message: ROS2 message of the type sensor_msgs.msg.CompressedImage.
+
+    	Returns:
+        	None
+    	"""
+		np_arr = np.frombuffer(message.data, np.uint8)
+		image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+    
+    	# Initialize QR code detector
+		qr_detector = cv2.QRCodeDetector()
+    
+    	# Detect and decode QR code
+		data, bbox, _ = qr_detector.detectAndDecode(image)
+    
+		if data:
+        	# Process the QR code data
+			self.process_qr_code(data)
+        
+        	# Optional: Draw bounding box for debugging
+			if bbox is not None:
+				cv2.polylines(image, [bbox.astype(int)], True, (0, 255, 0), 2)
+				self.logger.info(f"QR Code detected: {data}")
+    
+    	# Optional: Publish debug image for visualization
+		self.publish_debug_image(self.publisher_qr_decode, image)
+
+	def process_qr_code(self,qr_string):
+
+		"""Parse QR code string and extract navigation data for warehouse challenge.
+
+    	Args:
+        	qr_string: The decoded QR code string
+
+    	Returns:
+        	None
+    	"""
+		try:
+			parts = qr_string.split('_')
+
+			if len(parts) >= 3:
+				shelf_id = int(parts[0])
+				heuristic_angle = float(parts[1])
+				secret_code = parts[2]
+
+				self.qr_code_str = qr_string
+
+				self.logger.info(f"QR parsed - Shelf: {shelf_id}, Angle: {heuristic_angle}°, Code: {secret_code}")
+
+				self.navigate_using_heuristic(heuristic_angle)
+
+			else :
+				self.logger.error(f"Invalid QR format: {qr_string}")
+
+				
+				
+		except(ValueError, IndexError) as e:
+			self.logget.error(f"QR parsing failed : {e}")
+
+	def navigate_using_heuristic(self, angle_degrees):
+		"""Calculate next shelf position using heuristic angle from QR code.
+    
+    	The heuristic angle (0-360°) indicates the direction from current position
+    	to the next shelf location in the warehouse.
+
+    	Args:
+    	    angle_degrees: Heuristic angle in degrees (0-360°)
+
+    	Returns:
+    	    None
+    	"""
+    	# Convert angle to radians
+		angle_rad = math.radians(angle_degrees)
+	
+    	# Calculate next shelf position
+    	# Distance can be adjusted based on warehouse layout
+		navigation_distance = 5.0  # meters - adjust based on testing
+    
+    	# Calculate target coordinates using current position + heuristic vector
+		next_x = self.buggy_pose_x + navigation_distance * math.cos(angle_rad)
+		next_y = self.buggy_pose_y + navigation_distance * math.sin(angle_rad)
+    
+    	# Create navigation goal with calculated position and orientation
+		goal = self.create_goal_from_world_coord(next_x, next_y, angle_rad)
+    
+    	# Send goal to Nav2 action server
+		if self.send_goal_from_world_pose(goal):
+			self.logger.info(f"Navigating to next shelf using heuristic: {angle_degrees}° -> ({next_x:.2f}, {next_y:.2f})")
+		else:
+			self.logger.error("Failed to send heuristic navigation goal")
+
+
+
+	
+
 	def cerebri_status_callback(self, message):#✅
 		"""Callback function to handle cerebri status updates.
 
