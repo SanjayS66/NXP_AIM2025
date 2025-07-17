@@ -236,6 +236,14 @@ class WarehouseExplore(Node):
         #shelf detection using PCA variables
         self.MIN_CLUSTER_SIZE = 50 
 
+        #navigation variables 
+        self.current_shelf_index = 0
+        self.shelf_navigation_active = False
+        self.at_long_view = False
+        self.shelves_final = []  # Store detected shelves
+        self.object_names = []   # For merged object detection
+        self.object_count = []   # For merged object counts
+
 
     #extract the current x and y from the pose 
     def pose_callback(self, message):#✅
@@ -330,10 +338,12 @@ class WarehouseExplore(Node):
 
 #new part
         if self.full_map_explored_count > 2 and not self.exploration_done :
-            #filll !!!!!!!!!!!!!!
+            
             self.exploration_done = True 
             self.logger.info("Map fully explored and begiing shelf detection!!!")
-            self.shelf_detection(self.simple_map_curr)
+            self.shelves_final = self.shelf_detection(self.simple_map_curr)
+            if self.shelves_final:
+                self.start_shelf_navigation()
 
     def shelf_detection(self,simple_map_curr):
         slam_map = simple_map_curr
@@ -411,8 +421,7 @@ class WarehouseExplore(Node):
                 
                 detected_shelves.append(shelf_data)
                 
-                self.logger.info(f"Detected shelf: center=({center_metric[0]:.2f}, {center_metric[1]:.2f}), "
-                            f"dims=({width_m:.2f}x{height_m:.2f}m), orientation={math.degrees(orientation_rad):.1f}°")
+                self.logger.info(f"Detected shelf: center=({center_metric[0]:.2f}, {center_metric[1]:.2f}) with dims=({width_m:.2f}x{height_m:.2f}m), orientation={math.degrees(orientation_rad):.1f}°")
                 
             except np.linalg.LinAlgError:
                 self.logger.warn(f"SVD failed for component {component_id}, skipping")
@@ -449,10 +458,122 @@ class WarehouseExplore(Node):
                         MIN_SHORT_DIM <= short_dim <= MAX_SHORT_DIM)
         
         valid_aspect = MIN_ASPECT <= aspect_ratio <= MAX_ASPECT
-        self.logger.info("check for valis shelves complete")
+        self.logger.info("check for valid shelves complete")
         return valid_dimensions and valid_aspect
     
 
+    def start_shelf_navigation(self):
+            self.logger.info("Starting Navigation to the detected shelves...")
+            self.logger.info("Calculating the viewpoints for each shelves...")
+            self.calculate_shelf_viewpoints()
+            self.debug_shelf_angles()
+            self.navigate_to_first_shelf()
+            return 
+    
+    def calculate_shelf_viewpoints(self):
+        """Calculate optimal viewpoints for each detected shelf"""
+        for shelf in self.shelves_final:  # Use shelves_final instead of self.detected_shelves
+            center_x, center_y = shelf['center_world']
+            orientation = shelf['orientation']
+            
+            # Calculate perpendicular directions
+            long_axis_x = math.cos(orientation)
+            long_axis_y = math.sin(orientation)
+            short_axis_x = -long_axis_y
+            short_axis_y = long_axis_x
+            
+            # Calculate viewpoint positions (2.5m away from shelf center)
+            viewpoint_distance = 2.5
+            
+            # Long viewpoint (perpendicular to long edge, for object detection)
+            long_view_x = center_x + viewpoint_distance * short_axis_x
+            long_view_y = center_y + viewpoint_distance * short_axis_y
+            long_view_angle = math.atan2(-short_axis_y, -short_axis_x)
+            
+            # Short viewpoint (perpendicular to short edge, for QR scanning)  
+            short_view_x = center_x + viewpoint_distance * long_axis_x
+            short_view_y = center_y + viewpoint_distance * long_axis_y
+            short_view_angle = math.atan2(-long_axis_y, -long_axis_x)
+            
+            # Store viewpoints in shelf data
+            shelf['long_viewpoint'] = (long_view_x, long_view_y, long_view_angle)
+            shelf['short_viewpoint'] = (short_view_x, short_view_y, short_view_angle)
+            shelf['visited'] = False
+            
+            self.logger.info(f"Calculated viewpoints for shelf at ({center_x:.2f}, {center_y:.2f})")
+    
+    def debug_shelf_angles(self):
+        """Debug function to print all shelf angles from origin"""
+        self.logger.info("📊 SHELF ANGLE ANALYSIS:")
+        self.logger.info(f"🎯 Target initial_angle: {self.initial_angle}°")
+        self.logger.info(f"🤖 Robot at: ({self.buggy_pose_x:.2f}, {self.buggy_pose_y:.2f})")
+        
+        for i, shelf in enumerate(self.shelves_final):
+            cx, cy = shelf['center_world']
+            
+            # Angle from origin to shelf
+            angle_from_origin = math.atan2(cy, cx)
+            angle_from_origin_deg = (math.degrees(angle_from_origin) + 360) % 360
+            
+            # Angle from robot to shelf
+            angle_from_robot = math.atan2(cy - self.buggy_pose_y, cx - self.buggy_pose_x)
+            angle_from_robot_deg = (math.degrees(angle_from_robot) + 360) % 360
+            
+            # Errors
+            error_from_origin = abs((angle_from_origin_deg - self.initial_angle + 180) % 360 - 180)
+            error_from_robot = abs((angle_from_robot_deg - self.initial_angle + 180) % 360 - 180)
+            
+            self.logger.info(f"  Shelf {i+1} at ({cx:.2f}, {cy:.2f}):")
+            self.logger.info(f"    From origin: {angle_from_origin_deg:.1f}° (error: {error_from_origin:.1f}°)")
+            self.logger.info(f"    From robot:  {angle_from_robot_deg:.1f}° (error: {error_from_robot:.1f}°)")
+
+    def navigate_to_first_shelf(self):
+        """Navigate to first shelf using initial_angle calculated from world origin (0,0)"""
+        best_shelf = None
+        best_index = -1
+        min_angle_error = float('inf')
+        
+        self.logger.info(f"Looking for first shelf using initial angle: {self.initial_angle}°")
+        self.logger.info(f"Robot current position: ({self.buggy_pose_x:.2f}, {self.buggy_pose_y:.2f})")
+        
+        for i, shelf in enumerate(self.shelves_final):
+            if shelf.get('visited', False):
+                continue
+                
+            cx, cy = shelf['center_world']
+            
+            # Calculate angle from world origin (0,0) to shelf center
+            angle_to_shelf = math.atan2(cy - 0.0, cx - 0.0)  # From origin to shelf
+            angle_deg = (math.degrees(angle_to_shelf) + 360) % 360
+            
+            # Match against initial_angle
+            error = abs((angle_deg - self.initial_angle + 180) % 360 - 180)
+            
+            self.logger.info(f"  Shelf {i+1}: center=({cx:.2f}, {cy:.2f})")
+            self.logger.info(f"    Angle from origin: {angle_deg:.1f}°, error: {error:.1f}°")
+            
+            if error < min_angle_error:
+                min_angle_error = error
+                best_shelf = shelf
+                best_index = i
+        
+        if best_shelf is None:
+            self.logger.error("No shelf found for initial angle!")
+            return False
+        
+        self.current_shelf_index = best_index
+        self.current_shelf = best_shelf
+        self.shelf_navigation_active = True
+        
+        self.logger.info(f"Selected FIRST shelf {best_index + 1} (angle error: {min_angle_error:.1f}°)")
+        
+        # Navigate to long viewpoint for object detection
+        long_x, long_y, long_angle = best_shelf['long_viewpoint']
+        goal = self.create_goal_from_world_coord(long_x, long_y, long_angle)
+        self.at_long_view = True
+        
+        return self.send_goal_from_world_pose(goal)
+    
     def get_frontiers_for_space_exploration(self, map_array):#✅
         """Identifies frontiers for space exploration.
 
@@ -600,6 +721,65 @@ class WarehouseExplore(Node):
             self.logger.error("Failed to send heuristic navigation goal")
 
 
+    def merge_object_detections(self, prev_names, prev_counts, curr_names, curr_counts):
+        merged_dict = {}
+
+        # Normalize previous and current names (lowercase and strip)
+        prev_dict = {name.strip().lower(): count for name, count in zip(prev_names, prev_counts)}
+        curr_dict = {name.strip().lower(): count for name, count in zip(curr_names, curr_counts)}
+
+        # Union all object names
+        all_object_names = set(prev_dict.keys()).union(set(curr_dict.keys()))
+
+        # Allowed object list
+        allowed_objects = {
+            "banana", "zebra", "teddy bear", "car",
+            "potted plant", "cup", "clock", "horse"
+        }
+
+        for name in all_object_names:
+            if name not in allowed_objects:
+                continue  # Skip objects not in allowed list
+
+            prev_count = prev_dict.get(name, 0)
+            curr_count = curr_dict.get(name, 0)
+
+            # Merge rule
+            merged_dict[name] = max(prev_count, curr_count)
+
+        # Convert to lists and preserve original casing from current/previous names
+        merged_names = []
+        merged_counts = []
+
+        for name, count in merged_dict.items():
+            original_name = None
+            for n in curr_names + prev_names:
+                if n.strip().lower() == name:
+                    original_name = n.strip()
+                    break
+            merged_names.append(original_name or name)
+            merged_counts.append(count)
+
+        return merged_names, merged_counts
+    
+    def publish_shelf_data(self):
+        """Publish complete shelf data with objects and QR code"""
+        shelf_message = WarehouseShelf()
+        shelf_message.object_name = self.object_names
+        shelf_message.object_count = self.object_count
+        shelf_message.qr_decoded = self.qr_code_str
+        
+        self.publisher_shelf_data.publish(shelf_message)
+        
+        self.logger.info(f"   Published shelf data:")
+        self.logger.info(f"   Objects: {self.object_names}")
+        self.logger.info(f"   Counts: {self.object_count}")
+        self.logger.info(f"   QR Code: {self.qr_code_str}")
+        
+        # Reset for next shelf
+        self.object_names = []
+        self.object_count = []
+        self.qr_code_str = "Empty"
 
     
 
