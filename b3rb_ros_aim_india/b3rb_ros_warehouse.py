@@ -51,6 +51,8 @@ from sklearn.decomposition import PCA
 import tkinter as tk
 from tkinter import ttk
 
+from pyzbar.pyzbar import decode
+
 QOS_PROFILE_DEFAULT = 10
 SERVER_WAIT_TIMEOUT_SEC = 5.0
 
@@ -211,7 +213,7 @@ class WarehouseExplore(Node):
         self.goal_completed = True   # No goal is currently in-progress.
         self.goal_handle_curr = None  #reference to current active goal 
         self.cancelling_goal = False  #tracks whether goal cancellation in progress or not
-        self.recovery_threshold = 10  #number of recovery steps before giving up
+        self.recovery_threshold = 20  #number of recovery steps before giving up
 
         # --- Goal Creation ---
         self._frame_id = "map"
@@ -223,7 +225,7 @@ class WarehouseExplore(Node):
         self.full_map_explored_count = 0
 
         # --- QR Code Data ---
-        self.qr_code_str = "Empty"
+        self.qr_data = "Empty"
         if PROGRESS_TABLE_GUI:
             self.table_row_count = 0
             self.table_col_count = 0
@@ -236,14 +238,19 @@ class WarehouseExplore(Node):
         #shelf detection using PCA variables
         self.MIN_CLUSTER_SIZE = 50 
 
+        #timer management variables
+        self.object_timer = None
+        self.qr_timer = None
         #navigation variables 
-        self.current_shelf_index = 0
         self.shelf_navigation_active = False
-        self.at_long_view = False
+        self.at_major_axis= False
+        self.current_shelf = None
         self.shelves_final = []  # Store detected shelves
         self.object_names = []   # For merged object detection
         self.object_count = []   # For merged object counts
-
+        self.current_shelf_index = 0
+        self.qr_scanning = False
+        self.qr_data = "Empty"
 
     #extract the current x and y from the pose 
     def pose_callback(self, message):#✅
@@ -343,7 +350,11 @@ class WarehouseExplore(Node):
             self.logger.info("Map fully explored and begiing shelf detection!!!")
             self.shelves_final = self.shelf_detection(self.simple_map_curr)
             if self.shelves_final:
-                self.start_shelf_navigation()
+                self.logger.info("Starting Navigation to the detected shelves...")
+                self.logger.info("Calculating the viewpoints for each shelves...")
+                self.calculate_shelf_viewpoints()
+                self.debug_shelf_angles()
+                self.navigate_to_first_shelf()
 
     def shelf_detection(self,simple_map_curr):
         slam_map = simple_map_curr
@@ -461,14 +472,6 @@ class WarehouseExplore(Node):
         self.logger.info("check for valid shelves complete")
         return valid_dimensions and valid_aspect
     
-
-    def start_shelf_navigation(self):
-            self.logger.info("Starting Navigation to the detected shelves...")
-            self.logger.info("Calculating the viewpoints for each shelves...")
-            self.calculate_shelf_viewpoints()
-            self.debug_shelf_angles()
-            self.navigate_to_first_shelf()
-            return 
     
     def calculate_shelf_viewpoints(self):
         """Calculate optimal viewpoints for each detected shelf"""
@@ -486,27 +489,27 @@ class WarehouseExplore(Node):
             viewpoint_distance = 2.5
             
             # Long viewpoint (perpendicular to long edge, for object detection)
-            long_view_x = center_x + viewpoint_distance * short_axis_x
-            long_view_y = center_y + viewpoint_distance * short_axis_y
-            long_view_angle = math.atan2(-short_axis_y, -short_axis_x)
+            major_x = center_x + viewpoint_distance * short_axis_x
+            major_y = center_y + viewpoint_distance * short_axis_y
+            major_angle = math.atan2(-short_axis_y, -short_axis_x)
             
             # Short viewpoint (perpendicular to short edge, for QR scanning)  
-            short_view_x = center_x + viewpoint_distance * long_axis_x
-            short_view_y = center_y + viewpoint_distance * long_axis_y
-            short_view_angle = math.atan2(-long_axis_y, -long_axis_x)
+            minor_x = center_x + viewpoint_distance * long_axis_x
+            minor_y = center_y + viewpoint_distance * long_axis_y
+            minor_angle = math.atan2(-long_axis_y, -long_axis_x)
             
             # Store viewpoints in shelf data
-            shelf['long_viewpoint'] = (long_view_x, long_view_y, long_view_angle)
-            shelf['short_viewpoint'] = (short_view_x, short_view_y, short_view_angle)
+            shelf['major_axis'] = (major_x , major_y , major_angle )
+            shelf['minor_axis'] = (minor_x, minor_y, minor_angle)
             shelf['visited'] = False
             
             self.logger.info(f"Calculated viewpoints for shelf at ({center_x:.2f}, {center_y:.2f})")
     
     def debug_shelf_angles(self):
         """Debug function to print all shelf angles from origin"""
-        self.logger.info("📊 SHELF ANGLE ANALYSIS:")
-        self.logger.info(f"🎯 Target initial_angle: {self.initial_angle}°")
-        self.logger.info(f"🤖 Robot at: ({self.buggy_pose_x:.2f}, {self.buggy_pose_y:.2f})")
+        self.logger.info("SHELF ANGLE ANALYSIS:")
+        self.logger.info(f"Target initial_angle: {self.initial_angle}°")
+        self.logger.info(f"Robot at: ({self.buggy_pose_x:.2f}, {self.buggy_pose_y:.2f})")
         
         for i, shelf in enumerate(self.shelves_final):
             cx, cy = shelf['center_world']
@@ -567,10 +570,10 @@ class WarehouseExplore(Node):
         
         self.logger.info(f"Selected FIRST shelf {best_index + 1} (angle error: {min_angle_error:.1f}°)")
         
-        # Navigate to long viewpoint for object detection
-        long_x, long_y, long_angle = best_shelf['long_viewpoint']
-        goal = self.create_goal_from_world_coord(long_x, long_y, long_angle)
-        self.at_long_view = True
+        # Navigate to major_axis for object detection
+        major_x, major_y, major_angle = best_shelf['major_axis']
+        goal = self.create_goal_from_world_coord(major_x, major_y, major_angle)
+        self.at_major_axis = True
         
         return self.send_goal_from_world_pose(goal)
     
@@ -648,77 +651,128 @@ class WarehouseExplore(Node):
         Returns:
             None
         """
+        """Handle camera images for QR scanning during shelf navigation"""
         np_arr = np.frombuffer(message.data, np.uint8)
         image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-        # Process the image from front camera as needed.
+        
+        # Only scan QR codes when at minor axis (short viewpoint) during shelf navigation
+        if self.shelf_navigation_active and self.qr_scanning:
+            try:
+                decoded_objs = decode(image)
+                
+                if decoded_objs:
+                    qr_data = decoded_objs[0].data.decode("utf-8")
+                    self.qr_data= qr_data  
+                    self.qr_code_str = qr_data
+                    self.logger.info(f"QR Code detected: {qr_data}")
+                    
+                    # Parse QR code for next shelf angle
+                    try:
+                        parts = qr_data.split('_')
+                        if len(parts) >= 2:
+                            next_shelf_angle = float(parts[1])
+                            self.initial_angle = next_shelf_angle
+                            self.logger.info(f" Next shelf angle: {next_shelf_angle}°")
+                            
+                            # Stop QR scanning once we get the data
+                            self.qr_scanning = False
+                            
+                    except (ValueError, IndexError) as e:
+                        self.logger.error(f"QR parsing failed: {e}")
+                        
+            except Exception as e:
+                self.logger.error(f"QR detection failed: {e}")
+
 
         # Optional line for visualizing image on foxglove.
         # self.publish_debug_image(self.publisher_qr_decode, image)
 
+    def complete_current_shelf_callback(self):
+        """Timer callback to complete current shelf"""
+        if self.qr_timer is not None:
+            self.qr_timer.destroy()
+            self.qr_timer = None
+        self.complete_current_shelf()
 
-    def process_qr_code(self,qr_string):
 
-        """Parse QR code string and extract navigation data for warehouse challenge.
+    def complete_current_shelf(self):
+        """Complete current shelf processing and move to next shelf"""
+        if not self.current_shelf:
+            self.logger.error("No current shelf to complete")
+            return
+            
+        # Mark current shelf as visited
+        self.current_shelf['visited'] = True
+        
+        # Publish shelf data
+        self.publish_shelf_data()
+        
+        # Log completion
+        self.logger.info(f"Completed shelf {self.current_shelf_index + 1}")
+        self.logger.info(f"Final objects: {self.object_names}")
+        self.logger.info(f"Final counts: {self.object_count}")
+        self.logger.info(f"QR code: {self.qr_data}")
+        
+        # Reset state flags
+        self.at_major_axis = False
+        self.qr_scanning = False
+        
+        # Move to next shelf
+        self.navigate_to_next_shelf()
 
-        Args:
-            qr_string: The decoded QR code string
-
-        Returns:
-            None
-        """
-        try:
-            parts = qr_string.split('_')
-
-            if len(parts) >= 3:
-                shelf_id = int(parts[0])
-                heuristic_angle = float(parts[1])
-                secret_code = parts[2]
-
-                self.qr_code_str = qr_string
-
-                self.logger.info(f"QR parsed - Shelf: {shelf_id}, Angle: {heuristic_angle}°, Code: {secret_code}")
-
-                self.navigate_using_heuristic(heuristic_angle)
-
-            else :
-                self.logger.error(f"Invalid QR format: {qr_string}")
-
+    def navigate_to_next_shelf(self):
+        """Navigate to next shelf using QR-decoded angle from origin (0,0)"""
+        if self.qr_data == "Empty":
+            self.logger.info("No QR data available - workflow complete!")
+            self.shelf_navigation_active = False
+            return
+        qr_angle = self.initial_angle
+        # Find next shelf using QR-decoded angle
+        best_shelf = None
+        best_index = -1
+        min_angle_error = float('inf')
+        
+        self.logger.info(f"Looking for next shelf using QR angle: {qr_angle}°")
+        
+        for i, shelf in enumerate(self.shelves_final):
+            if shelf.get('visited', False):
+                continue
                 
-                
-        except(ValueError, IndexError) as e:
-            self.logger.error(f"QR parsing failed : {e}")
+            cx, cy = shelf['center_world']
+            
+            # Calculate angle from world origin (0,0) to shelf center
+            angle_to_shelf = math.atan2(cy - 0.0, cx - 0.0)
+            angle_deg = (math.degrees(angle_to_shelf) + 360) % 360
+            
+            # Match against QR-decoded angle
+            error = abs((angle_deg - self.initial_angle + 180) % 360 - 180)
+            
+            self.logger.info(f"  Shelf {i+1}: angle={angle_deg:.1f}°, error={error:.1f}°")
+            
+            if error < min_angle_error:
+                min_angle_error = error
+                best_shelf = shelf
+                best_index = i
+        
+        if best_shelf is None:
+            self.logger.info("All shelves visited - workflow complete!")
+            self.shelf_navigation_active = False
+            return
+        
+        self.current_shelf_index = best_index
+        self.current_shelf = best_shelf
+        
+        
 
-    def navigate_using_heuristic(self, angle_degrees):
-        """Calculate next shelf position using heuristic angle from QR code.
-    
-        The heuristic angle (0-360°) indicates the direction from current position
-        to the next shelf location in the warehouse.
+        self.logger.info(f"Selected NEXT shelf {best_index + 1} (angle error: {min_angle_error:.1f}°)")
+        
+        # Navigate to long viewpoint for object detection
+        major_x, major_y, major_angle = best_shelf['major_axis']
+        goal = self.create_goal_from_world_coord(major_x, major_y, major_angle)
+        self.at_major_axis = True
+        
+        self.send_goal_from_world_pose(goal)
 
-        Args:
-            angle_degrees: Heuristic angle in degrees (0-360°)
-
-        Returns:
-            None
-        """
-        # Convert angle to radians
-        angle_rad = math.radians(angle_degrees)
-    
-        # Calculate next shelf position
-        # Distance can be adjusted based on warehouse layout
-        navigation_distance = 5.0  # meters - adjust based on testing
-    
-        # Calculate target coordinates using current position + heuristic vector
-        next_x = self.buggy_pose_x + navigation_distance * math.cos(angle_rad)
-        next_y = self.buggy_pose_y + navigation_distance * math.sin(angle_rad)
-    
-        # Create navigation goal with calculated position and orientation
-        goal = self.create_goal_from_world_coord(next_x, next_y, angle_rad)
-    
-        # Send goal to Nav2 action server
-        if self.send_goal_from_world_pose(goal):
-            self.logger.info(f"Navigating to next shelf using heuristic: {angle_degrees}° -> ({next_x:.2f}, {next_y:.2f})")
-        else:
-            self.logger.error("Failed to send heuristic navigation goal")
 
 
     def merge_object_detections(self, prev_names, prev_counts, curr_names, curr_counts):
@@ -767,21 +821,43 @@ class WarehouseExplore(Node):
         shelf_message = WarehouseShelf()
         shelf_message.object_name = self.object_names
         shelf_message.object_count = self.object_count
-        shelf_message.qr_decoded = self.qr_code_str
+        shelf_message.qr_decoded = self.qr_data
         
         self.publisher_shelf_data.publish(shelf_message)
         
         self.logger.info(f"   Published shelf data:")
         self.logger.info(f"   Objects: {self.object_names}")
         self.logger.info(f"   Counts: {self.object_count}")
-        self.logger.info(f"   QR Code: {self.qr_code_str}")
+        self.logger.info(f"   QR Code: {self.qr_data}")
         
         # Reset for next shelf
         self.object_names = []
         self.object_count = []
-        self.qr_code_str = "Empty"
 
-    
+    def move_to_minor_axis_callback(self):
+        """Timer callback to move to minor axis"""
+        if self.object_timer is not None:
+            self.object_timer.destroy()
+            self.object_timer = None
+        self.move_to_minor_axis()
+
+    def move_to_minor_axis(self):
+        """move from major axis to minor axis for QR scanning"""
+        if not self.current_shelf:
+            self.logger.info("Not currently at any shelf...")
+            return
+        minor_x,minor_y,minor_angle = self.current_shelf['minor_axis']
+        self.logger.info(f"Moving to the point ({minor_x:.2f},{minor_y:.2f})")
+        goal = self.create_goal_from_world_coord(minor_x,minor_y,minor_angle)
+        self.at_major_axis = False
+        self.qr_scanning = True
+
+        status = self.send_goal_from_world_pose(goal)
+
+        if status:
+            self.logger.info("Successfully send goal to the minor axis for QR scanning...")
+        else :
+            self.logger.info("Failed to send to goal!!!")
 
     def cerebri_status_callback(self, message):#✅
         """Callback function to handle cerebri status updates.
@@ -828,9 +904,15 @@ class WarehouseExplore(Node):
             None
         """
         self.shelf_objects_curr = message
+        if self.shelf_navigation_active and self.at_major_axis:
+            self.object_names, self.object_count = self.merge_object_detections(self.object_names, self.object_count,
+            message.object_name, message.object_count)
+            # self.logger.info(f"Updated merged objects: {self.object_names}")
+            # self.logger.info(f"Updated merged counts: {self.object_count}")
         # Process the shelf objects as needed.
 
         # How to send WarehouseShelf messages for evaluation.
+
         """
         * Example for sending WarehouseShelf messages for evaluation.
             shelf_data_message = WarehouseShelf()
@@ -923,6 +1005,20 @@ class WarehouseExplore(Node):
             self.logger.info("Goal completed successfully!")
         else:
             self.logger.warn(f"Goal failed with status: {status}")
+
+        if self.shelf_navigation_active:
+            if self.at_major_axis:
+                if self.object_timer is not None:
+                    self.object_timer.destroy()
+                self.logger.info("Identifying Shelf objects for 5s...")
+                self.object_timer = self.create_timer(5.0,self.move_to_minor_axis_callback)
+            else:
+                if self.qr_timer is not None:
+                    self.qr_timer.destroy()
+                self.logger.info("Scanning the QR for next 5s interval...")
+                self.qr_timer = self.create_timer(5.0,self.complete_current_shelf_callback)
+        else :
+            self.logger.warn("Goal failed !!!")
 
         self.goal_completed = True  # Mark goal as completed.
         self.goal_handle_curr = None  # Clear goal handle.
