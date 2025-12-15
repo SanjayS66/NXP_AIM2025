@@ -1,3 +1,193 @@
+# NXP AIM India 2025 - Warehouse Treasure Hunt Solution
+
+## About NXP AIM India 2025
+The NXP AIM (Artificial Intelligence and Machine Learning) India 2025 is a national-level robotics competition focused on autonomous navigation and object recognition. Participants develop solutions for the B3RB warehouse challenge, where an autonomous rover must navigate through a simulated warehouse environment, locate shelves using SLAM-generated maps, decode QR codes to find sequential shelf locations, and identify objects using computer vision. The challenge tests skills in ROS2 development, path planning with Nav2, sensor fusion, and real-time decision making.
+
+## Our Implementation Approach
+
+This repository contains a complete solution for the NXP AIM India 2025 warehouse challenge, implementing autonomous exploration, PCA-based shelf detection, dual-viewpoint navigation, and sequential shelf traversal using QR-decoded angle heuristics.
+
+### A. System Architecture
+
+Our solution is built around the **WarehouseExplore node** (`b3rb_ros_warehouse.py`) which serves as the main control logic:
+
+- **Node Structure**: `WarehouseExplore` class managing the complete workflow
+- **Action Clients**: `NavigateToPose` for Nav2 integration
+- **Key Subscriptions**: 
+  - `/pose` - Robot localization
+  - `/map` - SLAM-generated occupancy grid
+  - `/global_costmap/costmap` - Nav2 inflated costmap
+  - `/shelf_objects` - YOLO object detection results
+  - `/camera/image_raw/compressed` - Camera feed for QR scanning
+- **Key Publishers**: 
+  - `/shelf_data` - Warehouse shelf information (objects + QR)
+  - `/cerebri/in/joy` - Robot arming and mode control
+  - `/debug_images/qr_code` - Debug visualization
+
+### B. Shelf Detection Strategy
+
+#### Shelf Detection (PCA-Based Approach)
+
+Our solution uses Principal Component Analysis (PCA) to detect shelves from the SLAM-generated occupancy grid:
+
+1. **Connected Component Analysis**: Extract occupied cells (value=100) from the map and group them into connected components
+2. **Size Filtering**: Filter components with minimum cluster size of 50 pixels to remove noise
+3. **PCA Application**: 
+   - Convert pixel coordinates to metric coordinates
+   - Apply SVD (Singular Value Decomposition) to find principal axes
+   - Calculate shelf dimensions along principal axes
+4. **Validation Criteria**:
+   - Long dimension: 0.8m - 15.0m
+   - Short dimension: 0.2m - 3.0m
+   - Aspect ratio: 1.5 - 15.0 (elongated rectangular shapes)
+5. **Orientation Calculation**: Determine shelf orientation from principal axis angle
+
+**Key function**: `shelf_detection()` in `b3rb_ros_warehouse.py` (lines 359-442)
+
+### C. Navigation Workflow
+
+#### Phase 1: Frontier-Based Exploration
+- **Objective**: Build a complete SLAM map of the warehouse
+- **Method**: Identify frontiers (boundaries between explored and unexplored space)
+- **Strategy**: Navigate to nearest frontiers within distance thresholds (4m-7m initially, adjusted dynamically)
+- **Completion**: Trigger shelf detection when no frontiers remain for 2+ iterations
+
+#### Phase 2: Viewpoint Calculation
+For each detected shelf, calculate two optimal viewpoints:
+- **Major Axis Viewpoint**: 2.5m perpendicular to the long edge (for object detection)
+- **Minor Axis Viewpoint**: 2.5m perpendicular to the short edge (for QR code scanning)
+
+**Key function**: `calculate_shelf_viewpoints()` (lines 476-506)
+
+#### Phase 3: Sequential Shelf Navigation
+1. **First Shelf Selection**: Use `initial_angle` parameter to find shelf matching angle from world origin (0,0)
+2. **Navigate to Major Axis**: Position robot for clear view of shelf objects (5-second detection window)
+3. **Navigate to Minor Axis**: Position robot for QR code scanning (5-second scanning window)
+4. **Next Shelf Selection**: Parse QR code to extract next shelf angle, repeat process
+
+**Key functions**:
+- `navigate_to_first_shelf()` (lines 533-578)
+- `navigate_to_next_shelf()` (lines 723-774)
+
+### D. Object Recognition
+
+- **Model**: YOLOv5 quantized (TFLite) running in separate node (`b3rb_ros_object_recog.py`)
+- **Allowed Objects**: banana, zebra, teddy bear, car, potted plant, cup, clock, horse
+- **Merging Strategy**: Merge multiple detections at major axis viewpoint using max count per object
+- **Timer**: 5-second detection window at major axis before moving to QR scanning
+
+**Key function**: `merge_object_detections()` (lines 778-817)
+
+### E. QR Code Processing
+
+#### QR Code Decoding
+- **Library**: pyzbar for QR detection
+- **Trigger**: Active only when at minor axis viewpoint (`self.qr_scanning = True`)
+- **Parsing**: Extract shelf ID and next angle from format: `{ID}_{angle}_{secret}`
+  - Example: `2_116.6_HKq3wvCg8DGyflz3oNIj8d` → next shelf at 116.6°
+- **Angle Update**: Store extracted angle as new `initial_angle` for next shelf search
+
+**Key function**: `camera_image_callback()` (lines 645-688)
+
+### F. State Machine
+
+#### State Management
+The implementation uses state flags to coordinate the workflow:
+- `exploration_done`: False until frontiers exhausted
+- `shelf_navigation_active`: True during shelf visiting sequence
+- `at_major_axis`: True when positioned for object detection
+- `qr_scanning`: True when positioned for QR code detection
+- `goal_completed`: Tracks Nav2 action status
+
+Timer callbacks manage transitions:
+- `object_timer`: 5s delay after reaching major axis → trigger move to minor axis
+- `qr_timer`: 5s delay after reaching minor axis → complete shelf and move to next
+
+### G. Data Publication
+
+#### Shelf Data Publishing
+After completing both viewpoints for each shelf:
+1. Compile merged object names and counts
+2. Add decoded QR string
+3. Publish `WarehouseShelf` message to `/shelf_data` topic
+4. Mark shelf as visited
+5. Reset detection arrays for next shelf
+
+**Key function**: `publish_shelf_data()` (lines 819-835)
+
+## Key Features of This Solution
+
+✅ **Autonomous Frontier Exploration**: Fully automated warehouse mapping using frontier detection  
+✅ **PCA-Based Shelf Detection**: Robust shelf identification using geometric analysis  
+✅ **Dual Viewpoint Navigation**: Optimized positions for both object detection and QR scanning  
+✅ **Angle-Based Heuristic**: Efficient shelf sequencing using QR-decoded angles from world origin  
+✅ **Multi-Detection Merging**: Improved accuracy through merging multiple object detection results  
+✅ **Recovery Handling**: Automatic goal cancellation after 20 recovery attempts  
+✅ **Dynamic Distance Adjustment**: Adaptive frontier selection when initial range fails  
+
+## Repository Structure
+
+```
+SanjayS66/NXP_AIM2025/
+├── b3rb_ros_aim_india/
+│   ├── __init__.py
+│   ├── b3rb_ros_warehouse.py       # Main navigation and control logic (1207 lines)
+│   ├── b3rb_ros_object_recog.py    # YOLOv5 object detection node
+│   ├── b3rb_ros_model_remove.py    # Curtain removal manager (evaluation use)
+│   └── b3rb_ros_draw_map.py        # SLAM map visualization (debugging)
+├── resource/                        # YOLO model files and config
+├── setup.py                         # ROS2 package setup
+├── package.xml                      # ROS2 package metadata
+└── README.md                        # This file
+```
+
+## Quick Start for This Implementation
+
+### Prerequisites
+- Ubuntu 22.04.5
+- ROS2 Humble Hawksbill
+- CogniPilot Airy release (follow setup in sections below)
+
+### Running the Solution
+
+1. **Build the workspace**:
+```bash
+cd ~/cognipilot/cranium/
+colcon build
+source install/setup.bash
+```
+
+2. **Launch simulation** (example for warehouse_1):
+```bash
+ros2 launch b3rb_gz_bringup sil.launch.py \
+    world:=nxp_aim_india_2025/warehouse_1 \
+    warehouse_id:=1 \
+    shelf_count:=2 \
+    initial_angle:=135.0 \
+    x:=0.0 y:=0.0 yaw:=0.0
+```
+
+3. **Run the exploration node** (in new terminal):
+```bash
+source ~/cognipilot/cranium/install/setup.bash
+ros2 run b3rb_ros_aim_india explore
+```
+
+4. **Run object detection** (in new terminal):
+```bash
+source ~/cognipilot/cranium/install/setup.bash
+ros2 run b3rb_ros_aim_india detect
+```
+
+The robot will:
+1. Autonomously explore and map the warehouse (Phase 1)
+2. Detect all shelves using PCA analysis (Phase 2)
+3. Navigate to first shelf based on `initial_angle`
+4. Visit each shelf sequentially using QR-decoded angles
+5. Publish shelf data with objects and QR codes to `/shelf_data`
+
+---
+
 # WAREHOUSE TREASURE HUNT & OBJECT RECOGNITION
 
 ## <span style="background-color: #FFFF00">INTRODUCTION</span>
