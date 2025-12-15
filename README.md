@@ -1,4 +1,6 @@
-# NXP AIM competiton description
+# NXP AIM India 2025 - Warehouse Treasure Hunt Solution
+
+### NXP AIM competiton description
 The NXP AIM India 2025 (Artificial Intelligence in Mobility) competition is a nationwide challenge by NXP Semiconductors that invites engineering students across India to design and test intelligent autonomous mobility solutions using simulation and modern robotics technologies. Participants address real-world mobility problems by developing algorithms for autonomy, perception, and control, utilizing sensors such as LiDAR and cameras in simulated environments like Gazebo. The competition emphasizes hands-on learning in AI/ML, ROS 2, embedded systems, and autonomous navigation, enabling students to gain industry-relevant skills, technical mentorship, and exposure while showcasing innovative solutions for smart and sustainable mobility.
 
 The core problem statement of the NXP AIM India 2025 challenge is to develop an autonomous mobile robotics solution that can efficiently navigate and perform tasks in a simulated environment—such as warehouse inventory management—by integrating camera and LiDAR sensor data to enable robust perception, obstacle avoidance, and navigation. Teams are expected to design algorithms that allow their robot to interpret sensor inputs, plan safe paths, and complete assigned missions quickly with minimal penalties, showcasing effective real-time decision-making and control in complex scenarios.
