@@ -24,6 +24,5 @@ Participants gain hands-on experience in:
 - **Perception** - Sensor fusion techniques
 - **Control** - Real-time decision making
 - **Simulation** - Gazebo environment
-- **Embedded Systems** - Industry-relevant implementation
 
 
