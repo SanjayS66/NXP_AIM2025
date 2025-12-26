@@ -17,8 +17,8 @@ The NXP AIM India 2025 (Artificial Intelligence in Mobility) competition is a na
 
 ### Key Technologies and Skills
 Participants gain hands-on experience in:
-- **AI/ML** - Artificial Intelligence and Machine Learning
 - **ROS 2** - Robot Operating System 2 development
+- **AI/ML** - Artificial Intelligence and Machine Learning
 - **Sensors** - LiDAR and camera integration
 - **Navigation** - Path planning with Nav2
 - **Perception** - Sensor fusion techniques
