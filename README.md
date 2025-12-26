@@ -1,6 +1,6 @@
 # NXP AIM India 2025 - Warehouse Treasure Hunt Solution
 
-### NXP AIM competiton description
+### NXP AIM competition description
 ### Overview and Challenge
 The NXP AIM India 2025 (Artificial Intelligence in Mobility) competition is a nationwide challenge by NXP Semiconductors that invites engineering students across India to: 
 - Design and test intelligent autonomous mobility solutions
@@ -76,7 +76,7 @@ def get_frontiers_for_space_exploration(self, map_array):
                 neighbors_cardinal = [(y±1, x), (y, x±1)]
                 
                 if has_free_neighbor AND no_obstacle_neighbors:
-                    frontiers.append((ny, nx))
+                    frontiers.append((y, x))
     return frontiers
 ```
 
@@ -142,6 +142,10 @@ def get_world_coord_from_map_coord(self, map_x, map_y, map_info):
 
 def get_map_coord_from_world_coord(self, world_x, world_y, map_info):
     """Convert world coordinates to grid indices"""
+    resolution = map_info.resolution
+    origin_x = map_info.origin.position.x
+    origin_y = map_info.origin.position.y
+    
     map_x = int((world_x - origin_x) / resolution)
     map_y = int((world_y - origin_y) / resolution)
     return (map_x, map_y)
