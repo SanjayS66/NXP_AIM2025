@@ -88,10 +88,14 @@ def get_frontiers_for_space_exploration(self, map_array):
                 has_free = any(map_array[ny, nx] == 0 
                               for ny, nx in neighbors_cardinal)
                 
+                # Append the unknown cell (y, x) if it meets frontier criteria
                 if has_free and not near_obstacle:
                     frontiers.append((y, x))
+                    break  # Found frontier, move to next cell
     return frontiers
 ```
+
+**Note**: The algorithm appends the unknown cell coordinates `(y, x)` itself as the frontier, not the neighbor coordinates `(ny, nx)`, since the unknown cell is the actual frontier location.
 
 #### 2. Adaptive Exploration Strategy
 
@@ -109,7 +113,7 @@ def get_frontiers_for_space_exploration(self, map_array):
 - Prevents infinite exploration loops
 
 ```python
-# Lines 286-357
+# Conceptual flow based on lines 286-357
 if frontiers:
     # Find closest frontier in distance range
     closest_frontier = select_frontier_in_range(
@@ -168,7 +172,7 @@ def get_map_coord_from_world_coord(self, world_x, world_y, map_info):
 
 **Purpose**: Identify elongated rectangular structures (warehouse shelves) from the occupancy grid.
 
-**Algorithm** (`shelf_detection`, lines 359-442):
+**Algorithm** (`shelf_detection`, lines 359-442 with helper function):
 ```
 1. Extract occupied cells (value = 100) from SLAM map
 2. Find connected components using scipy.ndimage.label()
