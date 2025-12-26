@@ -64,18 +64,31 @@ For each cell in the costmap:
 
 **Implementation Details**:
 ```python
-# From b3rb_ros_warehouse.py lines 580-624
+# Simplified pseudocode from b3rb_ros_warehouse.py lines 580-624
 def get_frontiers_for_space_exploration(self, map_array):
     frontiers = []
     for y in range(1, map_array.shape[0] - 1):
         for x in range(1, map_array.shape[1] - 1):
             if map_array[y, x] == -1:  # Unknown space
-                # Check 8 neighbors for obstacles
-                neighbors_complete = [(y±1, x±1), (y±1, x), (y, x±1)]
+                # Check all 8 neighbors for obstacles
+                neighbors_complete = [
+                    (y-1, x-1), (y-1, x), (y-1, x+1),
+                    (y, x-1),             (y, x+1),
+                    (y+1, x-1), (y+1, x), (y+1, x+1)
+                ]
                 # Check 4 cardinal neighbors for free space
-                neighbors_cardinal = [(y±1, x), (y, x±1)]
+                neighbors_cardinal = [
+                    (y-1, x), (y+1, x), (y, x-1), (y, x+1)
+                ]
                 
-                if has_free_neighbor AND no_obstacle_neighbors:
+                # Check if near obstacles
+                near_obstacle = any(map_array[ny, nx] > 0 
+                                   for ny, nx in neighbors_complete)
+                # Check if has free neighbor
+                has_free = any(map_array[ny, nx] == 0 
+                              for ny, nx in neighbors_cardinal)
+                
+                if has_free and not near_obstacle:
                     frontiers.append((y, x))
     return frontiers
 ```
