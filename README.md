@@ -1,5 +1,10 @@
 # NXP AIM India 2025 - Warehouse Treasure Hunt Solution
 
+
+https://github.com/user-attachments/assets/41b5d116-516e-43a9-810a-42658bbbcc90
+
+
+
 ## NXP AIM competiton description
 ## Overview and Challenge
 The NXP AIM India 2025 (Artificial Intelligence in Mobility) competition is a nationwide challenge by NXP Semiconductors that invites engineering students across India to: 
