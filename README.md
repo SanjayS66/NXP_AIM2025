@@ -84,18 +84,18 @@ def get_frontiers_for_space_exploration(self, map_array):
                 # Check if near obstacles
                 near_obstacle = any(map_array[ny, nx] > 0 
                                    for ny, nx in neighbors_complete)
-                # Check if has free neighbor
-                has_free = any(map_array[ny, nx] == 0 
-                              for ny, nx in neighbors_cardinal)
+                if near_obstacle:
+                    continue  # Skip this unknown cell
                 
-                # Append the unknown cell (y, x) if it meets frontier criteria
-                if has_free and not near_obstacle:
-                    frontiers.append((y, x))
-                    break  # Found frontier, move to next cell
+                # Find free space neighbor and use it as frontier
+                for ny, nx in neighbors_cardinal:
+                    if map_array[ny, nx] == 0:  # Free space
+                        frontiers.append((ny, nx))
+                        break  # Use first free neighbor found
     return frontiers
 ```
 
-**Note**: The algorithm appends the unknown cell coordinates `(y, x)` itself as the frontier, not the neighbor coordinates `(ny, nx)`, since the unknown cell is the actual frontier location.
+**Note**: The algorithm appends the free space neighbor coordinates `(ny, nx)` as the frontier goal, not the unknown cell `(y, x)` itself. This ensures the robot navigates to reachable free space adjacent to unknown areas.
 
 #### 2. Adaptive Exploration Strategy
 
