@@ -64,10 +64,6 @@ Upon completing both phases, the current shelf is marked as visited, and its dat
 **Error Handling:**  
 Angular error is calculated using the formula `abs((angle_deg - initial_angle + 180) % 360 - 180)` to handle wraparound at 0°/360° correctly. If no matching shelf is found or the QR code contains "Empty", the navigation sequence concludes gracefully.  The system also includes timer management to prevent blocking operations, destroying previous timers before creating new ones for each navigation phase.
 
-## 📊 Results and Performance
-
-Our team successfully cleared the challenging simulations round with excellent performance, demonstrating strong technical capabilities in autonomous navigation and ROS2 implementation. Based on our results, we were selected among the top teams to compete in the Regional Finale held at Bangalore, where we had the opportunity to showcase our solution on real hardware and compete against other talented teams from across the region.
-
 ## 🚀 How to Run
 
 ```bash
@@ -83,6 +79,11 @@ source install/setup. bash
 # Launch with parameters
 ros2 launch b3rb_ros_aim_india warehouse_navigation.launch.py shelf_count:=4 initial_angle:=45. 0
 ```
+
+## 📊 Results and Performance
+
+Our team successfully cleared the challenging simulations round with excellent performance, demonstrating strong technical capabilities in autonomous navigation and ROS2 implementation. Based on our results, we were selected among the top teams to compete in the Regional Finale held at Bangalore, where we had the opportunity to showcase our solution on real hardware and compete against other talented teams from across the region.
+
 
 ## 📄 License
 
